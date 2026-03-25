@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Бот для погоды в Telegram",
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "start": "node src/bot.js"
+  },
   "keywords": [
     "telegram",
     "bot",
