@@ -33,48 +33,123 @@ bot.command("weather", (ctx) => {
 });
 
 // Обработчик текстовых сообщений (ввод города)
+// Обработчик текстовых сообщений (ввод города)
 bot.on("text", async (ctx) => {
   if (!awaitingCity.has(ctx.from.id)) return;
 
-  const city = ctx.message.text.trim();
+  let city = ctx.message.text.trim();
 
-  if (DEBUG) console.log(`Поиск города: "${city}"`);
+  // Специальная обработка для известных российских городов
+  const russianCitiesMap = {
+    москва: { name: "Moscow", country: "RU" },
+    спб: { name: "Saint Petersburg", country: "RU" },
+    "санкт-петербург": { name: "Saint Petersburg", country: "RU" },
+    питер: { name: "Saint Petersburg", country: "RU" },
+    новосибирск: { name: "Novosibirsk", country: "RU" },
+    екатеринбург: { name: "Yekaterinburg", country: "RU" },
+    казань: { name: "Kazan", country: "RU" },
+    "нижний новгород": { name: "Nizhny Novgorod", country: "RU" },
+    челябинск: { name: "Chelyabinsk", country: "RU" },
+    омск: { name: "Omsk", country: "RU" },
+    самара: { name: "Samara", country: "RU" },
+    "ростов-на-дону": { name: "Rostov-on-Don", country: "RU" },
+    ростов: { name: "Rostov-on-Don", country: "RU" },
+    уфа: { name: "Ufa", country: "RU" },
+    красноярск: { name: "Krasnoyarsk", country: "RU" },
+    пермь: { name: "Perm", country: "RU" },
+    воронеж: { name: "Voronezh", country: "RU" },
+    волгоград: { name: "Volgograd", country: "RU" },
+  };
+
+  // Проверяем, есть ли город в списке русских городов
+  const cityLower = city.toLowerCase();
+  let searchCity = city;
+  let forceRussian = false;
+
+  if (russianCitiesMap[cityLower]) {
+    searchCity = russianCitiesMap[cityLower].name;
+    forceRussian = true;
+    if (DEBUG)
+      console.log(
+        `🔍 Русский город обнаружен: ${city} -> ищем ${searchCity} в России`,
+      );
+  }
+
+  if (DEBUG) console.log(`Поиск города: "${searchCity}"`);
 
   try {
-    // Сначала ищем ТОЛЬКО в России
-    let geoRes = await axios.get(
-      "https://geocoding-api.open-meteo.com/v1/search",
-      {
-        params: {
-          name: city,
-          count: 5,
-          language: "RU",
-          format: "json",
-          country_code: "RU",
-        },
-      },
-    );
+    let location = null;
+    let geoRes = null;
 
-    if (DEBUG) {
-      console.log(`Результатов в России: ${geoRes.data.results?.length || 0}`);
-      if (geoRes.data.results) {
-        geoRes.data.results.forEach((loc, i) => {
+    // Если это русский город из списка или если явно ищем в России
+    if (forceRussian) {
+      // Ищем ТОЛЬКО в России с английским названием
+      geoRes = await axios.get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        {
+          params: {
+            name: searchCity,
+            count: 5,
+            language: "RU",
+            format: "json",
+            country_code: "RU",
+          },
+        },
+      );
+
+      if (geoRes.data.results && geoRes.data.results.length > 0) {
+        location = geoRes.data.results[0];
+        if (DEBUG)
           console.log(
-            `  ${i + 1}. ${loc.name}, ${loc.country} (население: ${loc.population || "?"})`,
+            `✅ Найден в России: ${location.name}, ${location.country}`,
           );
-        });
       }
     }
 
-    // Если в России не нашли — ищем везде
-    if (!geoRes.data.results || geoRes.data.results.length === 0) {
+    // Если не нашли через forceRussian или не было forceRussian — ищем стандартным способом
+    if (!location) {
+      // Сначала ищем ТОЛЬКО в России
+      geoRes = await axios.get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        {
+          params: {
+            name: searchCity,
+            count: 5,
+            language: "RU",
+            format: "json",
+            country_code: "RU",
+          },
+        },
+      );
+
+      if (DEBUG) {
+        console.log(
+          `Результатов в России: ${geoRes.data.results?.length || 0}`,
+        );
+        if (geoRes.data.results) {
+          geoRes.data.results.forEach((loc, i) => {
+            console.log(
+              `  ${i + 1}. ${loc.name}, ${loc.country} (население: ${loc.population || "?"})`,
+            );
+          });
+        }
+      }
+
+      // Если в России нашли — берем первый
+      if (geoRes.data.results && geoRes.data.results.length > 0) {
+        location = geoRes.data.results[0];
+      }
+    }
+
+    // Если не нашли в России — ищем везде
+    if (!location) {
       if (DEBUG) console.log(`Не найдено в России, ищем везде...`);
 
       geoRes = await axios.get(
         "https://geocoding-api.open-meteo.com/v1/search",
         {
           params: {
-            name: city,
+            name: searchCity,
             count: 5,
             language: "RU",
             format: "json",
@@ -90,23 +165,40 @@ bot.on("text", async (ctx) => {
           );
         });
       }
+
+      if (geoRes.data.results && geoRes.data.results.length > 0) {
+        location = geoRes.data.results[0];
+
+        // Если нашли Таджикистан для Москвы — подменяем на Россию
+        if (cityLower === "москва" && location.country_code === "TJ") {
+          if (DEBUG)
+            console.log(`⚠️ Найден Таджикистан, ищем Москву в России...`);
+          // Ищем Москву в России специально
+          const moscowRes = await axios.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            {
+              params: {
+                name: "Moscow",
+                count: 1,
+                language: "RU",
+                format: "json",
+                country_code: "RU",
+              },
+            },
+          );
+          if (moscowRes.data.results && moscowRes.data.results.length > 0) {
+            location = moscowRes.data.results[0];
+            if (DEBUG)
+              console.log(
+                `✅ Подменено на: ${location.name}, ${location.country}`,
+              );
+          }
+        }
+      }
     }
 
-    if (!geoRes.data.results || geoRes.data.results.length === 0) {
+    if (!location) {
       throw new Error("Город не найден");
-    }
-
-    // Выбираем лучший результат
-    let location = geoRes.data.results[0];
-
-    // Если есть российские города — берем самый крупный
-    const russianCities = geoRes.data.results.filter(
-      (loc) => loc.country_code === "RU",
-    );
-    if (russianCities.length > 0) {
-      russianCities.sort((a, b) => (b.population || 0) - (a.population || 0));
-      location = russianCities[0];
-      if (DEBUG) console.log(`Выбран российский город: ${location.name}`);
     }
 
     const { latitude, longitude, name, country, country_code } = location;
@@ -114,13 +206,15 @@ bot.on("text", async (ctx) => {
     userCity.set(ctx.from.id, {
       latitude,
       longitude,
-      name,
+      name: city, // Сохраняем оригинальное название, которое ввел пользователь
       country,
     });
 
     // Формируем сообщение
-    let locationInfo = `${country ? `${name}, ${country}` : name}`;
-    if (country_code === "TJ" && name.toLowerCase() === "moscow") {
+    let locationInfo = `${city}, ${country}`;
+
+    // Если нашли Таджикистан для Москвы — предупреждаем
+    if (cityLower === "москва" && country_code === "TJ") {
       locationInfo = `⚠️ Найден город: ${name}, ${country}\n\nВозможно, вы имели в виду Москву, Россия?\nЕсли да, попробуйте написать "Москва Россия"`;
     }
 
