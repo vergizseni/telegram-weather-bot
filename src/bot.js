@@ -44,7 +44,7 @@ bot.on("text", async (ctx) => {
       {
         params: {
           name: city,
-          count: 1,
+          count: 10,
           language: "RU",
           format: "json",
         },
@@ -55,7 +55,47 @@ bot.on("text", async (ctx) => {
       throw new Error("Город не найден");
     }
 
-    const location = geoRes.data.results[0];
+    const location = null;
+
+    // Приоритет: Россия > Беларусь > Казахстан > другие страны СНГ
+    const priorityCountries = [
+      "RU",
+      "BY",
+      "KZ",
+      "UA",
+      "GE",
+      "AM",
+      "AZ",
+      "KG",
+      "UZ",
+      "TJ",
+      "TM",
+      "MD",
+    ];
+
+    // Сначала ищем среди приоритетных стран
+    for (const countryCode of priorityCountries) {
+      location = geoRes.data.results.find(
+        (loc) => loc.country_code === countryCode,
+      );
+      if (location) break;
+    }
+
+    // Если не нашли среди приоритетных — берем первый результат
+    if (!location) {
+      location = geoRes.data.results[0];
+    }
+
+    // Если нашли несколько городов в России — выбираем самый крупный по населению
+    const russianCities = geoRes.data.results.filter(
+      (loc) => loc.country_code === "RU",
+    );
+
+    if (russianCities.length > 1) {
+      // Сортируем по населению (от большего к меньшему)
+      russianCities.sort((a, b) => (b.population || 0) - (a.population || 0));
+      location = russianCities[0];
+    }
     const { latitude, longitude, name, country } = location;
 
     // Сохраняем координаты города для этого пользователя
