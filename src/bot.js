@@ -38,7 +38,7 @@ bot.on("text", async (ctx) => {
   const city = ctx.message.text.trim();
 
   try {
-    // Получаем координаты города
+    // Шаг 1: Получаем координаты города
     const geoRes = await axios.get(
       "https://geocoding-api.open-meteo.com/v1/search",
       {
@@ -55,9 +55,7 @@ bot.on("text", async (ctx) => {
       throw new Error("Город не найден");
     }
 
-    const location = null;
-
-    // Приоритет: Россия > Беларусь > Казахстан > другие страны СНГ
+    // Приоритетные страны (сначала Россия и ближнее зарубежье)
     const priorityCountries = [
       "RU",
       "BY",
@@ -73,7 +71,9 @@ bot.on("text", async (ctx) => {
       "MD",
     ];
 
-    // Сначала ищем среди приоритетных стран
+    let location = null;
+
+    // Ищем среди приоритетных стран
     for (const countryCode of priorityCountries) {
       location = geoRes.data.results.find(
         (loc) => loc.country_code === countryCode,
@@ -81,24 +81,24 @@ bot.on("text", async (ctx) => {
       if (location) break;
     }
 
-    // Если не нашли среди приоритетных — берем первый результат
+    // Если не нашли — берем первый
     if (!location) {
       location = geoRes.data.results[0];
     }
 
-    // Если нашли несколько городов в России — выбираем самый крупный по населению
+    // Если нашли несколько городов в России — выбираем самый крупный
     const russianCities = geoRes.data.results.filter(
       (loc) => loc.country_code === "RU",
     );
 
-    if (russianCities.length > 1) {
-      // Сортируем по населению (от большего к меньшему)
+    if (russianCities.length > 1 && location.country_code === "RU") {
       russianCities.sort((a, b) => (b.population || 0) - (a.population || 0));
       location = russianCities[0];
     }
-    const { latitude, longitude, name, country } = location;
 
-    // Сохраняем координаты города для этого пользователя
+    const { latitude, longitude, name, country, country_code } = location;
+
+    // Сохраняем координаты
     userCity.set(ctx.from.id, {
       latitude,
       longitude,
@@ -106,30 +106,33 @@ bot.on("text", async (ctx) => {
       country,
     });
 
-    // Показываем кнопки с выбором
-    ctx.reply(
-      `📍 Город: ${country ? `${name}, ${country}` : name}\n\nЧто хотите узнать?`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "🌤️ Погода сейчас", callback_data: "weather_now" },
-              {
-                text: "📅 Прогноз на завтра",
-                callback_data: "weather_tomorrow",
-              },
-            ],
-          ],
-        },
-      },
-    );
+    // Показываем информацию о найденном городе
+    let locationInfo = `${country ? `${name}, ${country}` : name}`;
+    if (country_code === "RU" && name === "Moscow") {
+      locationInfo = "Москва, Россия";
+    } else if (country_code === "TJ" && name === "Moscow") {
+      locationInfo =
+        "Москва (Таджикистан) — возможно, вы имели в виду Москву, Россию?";
+    }
 
-    // Убираем из ожидания ввода города
+    // Показываем кнопки
+    ctx.reply(`📍 Найден город: ${locationInfo}\n\nЧто хотите узнать?`, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🌤️ Погода сейчас", callback_data: "weather_now" },
+            { text: "📅 Прогноз на завтра", callback_data: "weather_tomorrow" },
+          ],
+        ],
+      },
+    });
+
     awaitingCity.delete(ctx.from.id);
   } catch (error) {
     console.error("Ошибка при получении города:", error.message);
     ctx.reply(
-      "❌ Не удалось найти этот город. Проверь правильность написания и попробуй снова.",
+      "❌ Не удалось найти этот город. Проверь правильность написания и попробуй снова.\n\n" +
+        "Совет: для российских городов можно написать название на русском языке.",
     );
     awaitingCity.delete(ctx.from.id);
   }
