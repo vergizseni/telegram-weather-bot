@@ -2,6 +2,8 @@ import { Telegraf } from "telegraf";
 import dotenv from "dotenv";
 import axios from "axios";
 
+const DEBUG = true;
+
 dotenv.config();
 
 // Хранилища данных
@@ -32,73 +34,83 @@ bot.command("weather", (ctx) => {
 
 // Обработчик текстовых сообщений (ввод города)
 bot.on("text", async (ctx) => {
-  // Проверяем, ждем ли мы город от этого пользователя
   if (!awaitingCity.has(ctx.from.id)) return;
 
   const city = ctx.message.text.trim();
 
+  if (DEBUG) console.log(`Поиск города: "${city}"`);
+
   try {
-    // Шаг 1: Получаем координаты города
-    const geoRes = await axios.get(
+    // Сначала ищем ТОЛЬКО в России
+    let geoRes = await axios.get(
       "https://geocoding-api.open-meteo.com/v1/search",
       {
         params: {
           name: city,
-          count: 10,
+          count: 5,
           language: "RU",
           format: "json",
+          country_code: "RU",
         },
       },
     );
+
+    if (DEBUG) {
+      console.log(`Результатов в России: ${geoRes.data.results?.length || 0}`);
+      if (geoRes.data.results) {
+        geoRes.data.results.forEach((loc, i) => {
+          console.log(
+            `  ${i + 1}. ${loc.name}, ${loc.country} (население: ${loc.population || "?"})`,
+          );
+        });
+      }
+    }
+
+    // Если в России не нашли — ищем везде
+    if (!geoRes.data.results || geoRes.data.results.length === 0) {
+      if (DEBUG) console.log(`Не найдено в России, ищем везде...`);
+
+      geoRes = await axios.get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        {
+          params: {
+            name: city,
+            count: 5,
+            language: "RU",
+            format: "json",
+          },
+        },
+      );
+
+      if (DEBUG && geoRes.data.results) {
+        console.log(`Найдено везде: ${geoRes.data.results.length}`);
+        geoRes.data.results.forEach((loc, i) => {
+          console.log(
+            `  ${i + 1}. ${loc.name}, ${loc.country} (${loc.country_code})`,
+          );
+        });
+      }
+    }
 
     if (!geoRes.data.results || geoRes.data.results.length === 0) {
       throw new Error("Город не найден");
     }
 
-    // Приоритетные страны (сначала Россия и ближнее зарубежье)
-    const priorityCountries = [
-      "RU",
-      "BY",
-      "KZ",
-      "UA",
-      "GE",
-      "AM",
-      "AZ",
-      "KG",
-      "UZ",
-      "TJ",
-      "TM",
-      "MD",
-    ];
+    // Выбираем лучший результат
+    let location = geoRes.data.results[0];
 
-    let location = null;
-
-    // Ищем среди приоритетных стран
-    for (const countryCode of priorityCountries) {
-      location = geoRes.data.results.find(
-        (loc) => loc.country_code === countryCode,
-      );
-      if (location) break;
-    }
-
-    // Если не нашли — берем первый
-    if (!location) {
-      location = geoRes.data.results[0];
-    }
-
-    // Если нашли несколько городов в России — выбираем самый крупный
+    // Если есть российские города — берем самый крупный
     const russianCities = geoRes.data.results.filter(
       (loc) => loc.country_code === "RU",
     );
-
-    if (russianCities.length > 1 && location.country_code === "RU") {
+    if (russianCities.length > 0) {
       russianCities.sort((a, b) => (b.population || 0) - (a.population || 0));
       location = russianCities[0];
+      if (DEBUG) console.log(`Выбран российский город: ${location.name}`);
     }
 
     const { latitude, longitude, name, country, country_code } = location;
 
-    // Сохраняем координаты
     userCity.set(ctx.from.id, {
       latitude,
       longitude,
@@ -106,17 +118,13 @@ bot.on("text", async (ctx) => {
       country,
     });
 
-    // Показываем информацию о найденном городе
+    // Формируем сообщение
     let locationInfo = `${country ? `${name}, ${country}` : name}`;
-    if (country_code === "RU" && name === "Moscow") {
-      locationInfo = "Москва, Россия";
-    } else if (country_code === "TJ" && name === "Moscow") {
-      locationInfo =
-        "Москва (Таджикистан) — возможно, вы имели в виду Москву, Россию?";
+    if (country_code === "TJ" && name.toLowerCase() === "moscow") {
+      locationInfo = `⚠️ Найден город: ${name}, ${country}\n\nВозможно, вы имели в виду Москву, Россия?\nЕсли да, попробуйте написать "Москва Россия"`;
     }
 
-    // Показываем кнопки
-    ctx.reply(`📍 Найден город: ${locationInfo}\n\nЧто хотите узнать?`, {
+    ctx.reply(`📍 ${locationInfo}\n\nЧто хотите узнать?`, {
       reply_markup: {
         inline_keyboard: [
           [
@@ -129,10 +137,13 @@ bot.on("text", async (ctx) => {
 
     awaitingCity.delete(ctx.from.id);
   } catch (error) {
-    console.error("Ошибка при получении города:", error.message);
+    console.error("Ошибка:", error.message);
     ctx.reply(
-      "❌ Не удалось найти этот город. Проверь правильность написания и попробуй снова.\n\n" +
-        "Совет: для российских городов можно написать название на русском языке.",
+      "❌ Не удалось найти этот город.\n\n" +
+        "Попробуйте:\n" +
+        "• проверить написание\n" +
+        "• добавить страну (например, 'Москва Россия')\n" +
+        "• использовать английское название ('Moscow')",
     );
     awaitingCity.delete(ctx.from.id);
   }
